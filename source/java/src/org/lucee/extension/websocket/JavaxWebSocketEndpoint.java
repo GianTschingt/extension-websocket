@@ -9,6 +9,7 @@ import javax.websocket.OnClose;
 import javax.websocket.OnError;
 import javax.websocket.OnMessage;
 import javax.websocket.OnOpen;
+import javax.websocket.PongMessage;
 import javax.websocket.Session;
 import javax.websocket.server.PathParam;
 import javax.websocket.server.ServerEndpoint;
@@ -35,6 +36,11 @@ public class JavaxWebSocketEndpoint extends BaseWebSocketEndpoint {
 	@OnMessage
 	public String onMessage(Session session, String message, boolean last, @PathParam("component-name") String componentName) throws PageException, IOException {
 		return super.onMessage(session, message, last, componentName);
+	}
+
+	@OnMessage
+	public void onPong(Session session, PongMessage pong) {
+		super.onPong(session);
 	}
 
 	@OnError

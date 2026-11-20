@@ -34,11 +34,15 @@ public class WebsocketInfo extends BIF {
 	@Override
 	public Object invoke(final PageContext pc, final Object[] args) throws PageException {
 		CFMLEngine eng = CFMLEngineFactory.getInstance();
-		if (args.length > 1 || args.length < 0) throw eng.getExceptionUtil().createFunctionException(pc, "WebsocketInfo", 0, 1, args.length);
+		if (args.length > 2) throw eng.getExceptionUtil().createFunctionException(pc, "WebsocketInfo", 0, 2, args.length);
 
 		boolean addRaw = false;
-		if (args.length == 1) addRaw = eng.getCastUtil().toBooleanValue(args[0]);
+		if (args.length >= 1 && args[0] != null) addRaw = eng.getCastUtil().toBooleanValue(args[0]);
 
-		return WebSocketEndpointFactory.getInstance().getInfo(pc.getConfig(), addRaw);
+		// component: null -> the calling listener component (or all when not called from a listener), "*" -> all
+		String component = null;
+		if (args.length == 2 && args[1] != null) component = eng.getCastUtil().toString(args[1]);
+
+		return WebSocketEndpointFactory.getInstance().getInfo(pc.getConfig(), addRaw, component);
 	}
 }

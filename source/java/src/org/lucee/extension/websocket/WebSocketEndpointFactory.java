@@ -28,6 +28,9 @@ public class WebSocketEndpointFactory {
 
 	private static final long DEFAULT_REQUEST_TIMEOUT = 50 * 1000;
 	private static final long DEFAULT_IDLE_TIMEOUT = 300 * 1000;
+	private static final long DEFAULT_PING_INTERVAL = 30 * 1000;
+	private static final long DEFAULT_PONG_TIMEOUT = 10 * 1000;
+	private static final long DEFAULT_STALE_TIMEOUT = 0; // disabled, only useful for clients that send a heartbeat
 
 	private static final Class<?> JAKARTA_ENDPOINT_CLASS = JakartaWebSocketEndpoint.class;
 	private static final Class<?> JAVAX_ENDPOINT_CLASS = JavaxWebSocketEndpoint.class;
@@ -116,9 +119,22 @@ public class WebSocketEndpointFactory {
 		timeout = eng.getCastUtil().toLongValue(data.configuration.get("idleTimeout", null), 0);
 		if (timeout > 0L) data.idleTimeout = timeout * 1000;
 
+		// stale session detection (0 disables)
+		data.pingInterval = toMillis(data.configuration.get("pingInterval", null), DEFAULT_PING_INTERVAL);
+		data.pongTimeout = toMillis(data.configuration.get("pongTimeout", null), DEFAULT_PONG_TIMEOUT);
+		data.staleTimeout = toMillis(data.configuration.get("staleTimeout", null), DEFAULT_STALE_TIMEOUT);
+
 		ConfigWeb cw = pc.getConfig();
 		WSUtil.info(cw, "init WebSocketEndpoint for web context [" + cw.getIdentification().getId() + " - " + WSUtil.getServletContextRealPath(cw, "/")
 				+ "] mapping defined in the configuration is [" + path + "], this is resolved to [" + data.mapping.getPhysical() + "]");
+	}
+
+	// seconds to milliseconds, 0 disables, defaultValue (in milliseconds) when not set or invalid
+	private long toMillis(Object value, long defaultValue) {
+		if (value == null) return defaultValue;
+		long l = eng.getCastUtil().toLongValue(value, -1);
+		if (l < 0) return defaultValue;
+		return l * 1000;
 	}
 
 	// register the websocket endpoint with the servlet container (one-time, thread-safe)
@@ -214,6 +230,15 @@ public class WebSocketEndpointFactory {
 	}
 
 	public Struct getInfo(ConfigWeb config, boolean addRaw) throws PageException {
+		return getInfo(config, addRaw, null);
+	}
+
+	/**
+	 * @param component listener component name to filter the instances by, null for the listener
+	 *            component the current thread is executing (all components of the web context when
+	 *            called outside a listener), "*" for all components of the web context
+	 */
+	public Struct getInfo(ConfigWeb config, boolean addRaw, String component) throws PageException {
 		Data data = getOrCreateData(config);
 		if (data == null) throw eng.getExceptionUtil().createApplicationException("web context not yet ready (getIdentification() returned null)");
 		if (data.mapping == null) {
@@ -230,7 +255,9 @@ public class WebSocketEndpointFactory {
 			}
 		}
 		registerEndpoint(config);
-		return data.getInfo(addRaw);
+		if (component == null) component = BaseWebSocketEndpoint.getCurrentComponent();
+		else if ("*".equals(component.trim()) || component.trim().isEmpty()) component = null;
+		return data.getInfo(addRaw, component);
 	}
 
 	public static WebSocketEndpointFactory getInstance() throws PageException {
@@ -335,9 +362,30 @@ public class WebSocketEndpointFactory {
 		return data.idleTimeout;
 	}
 
+	public long getPingInterval(ConfigWeb cw) {
+		Data data = getOrCreateData(cw);
+		if (data == null) throw new IllegalStateException("web context not yet ready");
+		return data.pingInterval;
+	}
+
+	public long getPongTimeout(ConfigWeb cw) {
+		Data data = getOrCreateData(cw);
+		if (data == null) throw new IllegalStateException("web context not yet ready");
+		return data.pongTimeout;
+	}
+
+	public long getStaleTimeout(ConfigWeb cw) {
+		Data data = getOrCreateData(cw);
+		if (data == null) throw new IllegalStateException("web context not yet ready");
+		return data.staleTimeout;
+	}
+
 	private static class Data {
 		public long requestTimeout = DEFAULT_REQUEST_TIMEOUT;
 		public long idleTimeout = DEFAULT_IDLE_TIMEOUT;
+		public long pingInterval = DEFAULT_PING_INTERVAL;
+		public long pongTimeout = DEFAULT_PONG_TIMEOUT;
+		public long staleTimeout = DEFAULT_STALE_TIMEOUT;
 		private ConfigWeb config;
 		private Map<String, Object> sessions = new ConcurrentHashMap<>();
 		public Mapping mapping;
@@ -348,7 +396,7 @@ public class WebSocketEndpointFactory {
 			this.config = cw;
 		}
 
-		public Struct getInfo(boolean addRaw) {
+		public Struct getInfo(boolean addRaw, String component) {
 			CFMLEngine eng = CFMLEngineFactory.getInstance();
 
 			Struct result = eng.getCreationUtil().createStruct();
@@ -370,14 +418,28 @@ public class WebSocketEndpointFactory {
 			Array instances = eng.getCreationUtil().createArray();
 			result.setEL("instances", instances);
 
-			Struct data;
+			// only the sessions of this web context (and listener component if defined), newest first
+			String contextId = WSUtil.getContextId(config);
+			java.util.List<Instance> list = new java.util.ArrayList<>();
 			for (Instance inst: BaseWebSocketEndpoint.instances.values()) {
+				if (inst.contextId != null && contextId != null && !inst.contextId.equals(contextId)) continue;
+				if (component != null && inst.componentName != null && !inst.componentName.equalsIgnoreCase(component)) continue;
+				list.add(inst);
+			}
+			list.sort((a, b) -> Long.compare(b.sequence, a.sequence));
+
+			Struct data;
+			for (Instance inst: list) {
 				Struct sessionInfo = WSUtil.getInfoSession(config, eng, inst.session, addRaw);
 				// if the session is closed, we don't care
 				if (sessionInfo == null) continue;
 				data = eng.getCreationUtil().createStruct();
 				instances.appendEL(data);
 				data.setEL("component", inst.cfc);
+				data.setEL("componentName", inst.componentName);
+				data.setEL("id", sessionInfo.get("id", null));
+				data.setEL("openTime", eng.getCreationUtil().createDateTime(inst.openTime));
+				data.setEL("lastMessageTime", eng.getCreationUtil().createDateTime(inst.lastMessage));
 				data.setEL("session", sessionInfo);
 			}
 
