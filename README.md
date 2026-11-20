@@ -124,6 +124,18 @@ info = websocketInfo();
 writeDump( info );
 ```
 
+## Releasing
+
+Every push to `master` publishes the current `-SNAPSHOT` (Sonatype snapshots and mvn.lucee-services.com) and then commits the next `-SNAPSHOT`, so each commit gets its own build number.
+
+For a release, run the **Java CI Combined** workflow manually on `master` and pick a type:
+
+- `release`: `X.Y.Z.N` to Maven Central, mvn.lucee-services.com and a GitHub release
+- `rc` / `beta` / `alpha`: `X.Y.Z.N-RC` (etc.) to mvn.lucee-services.com and a GitHub pre-release, not Maven Central
+- `snapshot`: re-deploys the current `-SNAPSHOT`, no version bump
+
+`N` comes from the `-SNAPSHOT` in `pom.xml`. After a release, `pom.xml` is bumped to the next `-SNAPSHOT`.
+
 ## Related
 
 - **[extension-websocket-client](https://github.com/lucee/extension-websocket-client)** — WebSocket client BIFs (`CreateWebSocketClient`) for CFML. This repo's integration tests ([test-websocket-client.cfm](tests/test-websocket-client.cfm), [test-idle-timeout.cfm](tests/test-idle-timeout.cfm)) exercise the full client⇄server loop, so they cover both extensions.
