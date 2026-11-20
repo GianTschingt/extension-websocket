@@ -27,6 +27,12 @@ public class AsyncInvoker extends Thread {
 	@Override
 	public void run() {
 		PageContext pc = null;
+		// the client may already be gone (e.g. a page that was closed right after connecting), nothing to do.
+		// static functions (onFirstOpen/onLastClose) are not bound to the session, onLastClose runs after it is closed
+		if (!isStatic && session != null && !WSUtil.isOpen(endpoint.getConfig(), session)) {
+			WSUtil.info(endpoint.getConfig(), "skip [" + name + "] for component [" + componentName + "], session is already closed");
+			return;
+		}
 		try {
 			pc = WSUtil.createPageContext(endpoint.getFactory(), endpoint.getConfig(), session, componentName);
 			if (isStatic) endpoint.invokeStatic(pc, session, componentName, name, args, WSUtil.NULL);

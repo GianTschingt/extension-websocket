@@ -491,6 +491,11 @@ public class WSUtil {
 		return null;
 	}
 
+	public static String getContextId(ConfigWeb cw) {
+		lucee.runtime.config.Identification id = cw.getIdentification();
+		return id == null ? null : id.getId();
+	}
+
 	public static boolean isOpen(ConfigWeb cw, Object session) {
 		if (getContainerType(cw) == TYPE_JAKARTA) return ((jakarta.websocket.Session) session).isOpen();
 		else if (getContainerType(cw) == TYPE_JAVAX) return ((javax.websocket.Session) session).isOpen();
@@ -529,10 +534,37 @@ public class WSUtil {
 
 	public static String getQueryString(ConfigWeb cw, Object session) {
 		synchronized (session) {
-			if (getContainerType(cw) == TYPE_JAKARTA) return ((jakarta.websocket.Session) session).getQueryString();
-			else if (getContainerType(cw) == TYPE_JAVAX) return ((javax.websocket.Session) session).getQueryString();
+			try {
+				if (getContainerType(cw) == TYPE_JAKARTA) return ((jakarta.websocket.Session) session).getQueryString();
+				else if (getContainerType(cw) == TYPE_JAVAX) return ((javax.websocket.Session) session).getQueryString();
+			}
+			catch (IllegalStateException ise) {
+				// session already closed (e.g. the client went away before onOpenAsync started)
+				return "";
+			}
 			return null;
 		}
+	}
+
+	/**
+	 * sends a websocket ping frame to the client, the client answers with a pong frame (handled by the
+	 * container / browser network stack, not by page JavaScript)
+	 */
+	public static void sendPing(ConfigWeb cw, Object session, ByteBuffer payload) throws IOException {
+		synchronized (session) {
+			if (getContainerType(cw) == TYPE_JAKARTA) ((jakarta.websocket.Session) session).getBasicRemote().sendPing(payload);
+			else if (getContainerType(cw) == TYPE_JAVAX) ((javax.websocket.Session) session).getBasicRemote().sendPing(payload);
+		}
+	}
+
+	/**
+	 * closes the session with close code 1001 (going away) and the given reason phrase
+	 */
+	public static void closeGoingAway(ConfigWeb cw, Object session, String reasonPhrase) throws IOException {
+		if (getContainerType(cw) == TYPE_JAKARTA)
+			close(cw, session, new jakarta.websocket.CloseReason(jakarta.websocket.CloseReason.CloseCodes.GOING_AWAY, reasonPhrase));
+		else if (getContainerType(cw) == TYPE_JAVAX)
+			close(cw, session, new javax.websocket.CloseReason(javax.websocket.CloseReason.CloseCodes.GOING_AWAY, reasonPhrase));
 	}
 
 	public static Object getReasonPhrase(ConfigWeb cw, Object session, Object closeReason) {

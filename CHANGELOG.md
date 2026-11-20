@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.1.0.0 (unreleased)
+
+- [LDEV-6457](https://luceeserver.atlassian.net/browse/LDEV-6457) — add `wsClient.getId()`, the id of the connection a listener function was called for
+- [LDEV-6457](https://luceeserver.atlassian.net/browse/LDEV-6457) — **behaviour change**: `websocketInfo()` only returns the sessions of the current web context, ordered newest first; called from inside a listener it only returns the sessions of that listener component. New optional argument `component` (`"*"` for all components). Instances now also contain `id`, `componentName`, `openTime` and `lastMessageTime`
+- [LDEV-6457](https://luceeserver.atlassian.net/browse/LDEV-6457) — stale session cleanup: ping every `pingInterval` (default 30s) and close sessions without a pong within `pongTimeout` (default 10s); optional `staleTimeout` (default off) closes sessions that did not send a message, e.g. pages frozen in Chrome's back/forward cache. Configurable in `websocket.json` or as listener properties
+- [LDEV-6457](https://luceeserver.atlassian.net/browse/LDEV-6457) — skip `onOpenAsync` for sessions that are already closed, no more `IllegalStateException` from `getQueryString()`
+
 ## 3.0.0.21 (unreleased)
 
 - [LDEV-6277](https://luceeserver.atlassian.net/browse/LDEV-6277) — expose `wsClient.getSession()` so listeners can reach the underlying JSR-356 `Session` (`getId()`, `getUserProperties()`, `getRequestParameterMap()`)

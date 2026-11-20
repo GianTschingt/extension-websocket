@@ -11,6 +11,7 @@ import jakarta.websocket.OnClose;
 import jakarta.websocket.OnError;
 import jakarta.websocket.OnMessage;
 import jakarta.websocket.OnOpen;
+import jakarta.websocket.PongMessage;
 import jakarta.websocket.Session;
 import jakarta.websocket.server.PathParam;
 import jakarta.websocket.server.ServerEndpoint;
@@ -34,6 +35,11 @@ public class JakartaWebSocketEndpoint extends BaseWebSocketEndpoint {
 	@OnMessage
 	public String onMessage(Session session, String message, boolean last, @PathParam("component-name") String componentName) throws PageException, IOException {
 		return super.onMessage(session, message, last, componentName);
+	}
+
+	@OnMessage
+	public void onPong(Session session, PongMessage pong) {
+		super.onPong(session);
 	}
 
 	@OnError

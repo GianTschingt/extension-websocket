@@ -5,11 +5,13 @@ import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.lucee.extension.websocket.client.WSClient;
 import org.lucee.extension.websocket.client.WSClients;
 import org.lucee.extension.websocket.util.AsyncInvoker;
 import org.lucee.extension.websocket.util.GraceStop;
+import org.lucee.extension.websocket.util.SessionMonitor;
 import org.lucee.extension.websocket.util.WSUtil;
 
 import lucee.loader.engine.CFMLEngine;
@@ -43,6 +45,14 @@ public class BaseWebSocketEndpoint {
 	private long idleTimeout = -1;
 	private int id;
 	private static AtomicInteger counter = new AtomicInteger(1);
+	private static final AtomicLong openSequence = new AtomicLong();
+	// name of the listener component the current thread is executing a listener function for
+	private static final ThreadLocal<String> currentComponent = new ThreadLocal<>();
+
+	// stale socket detection, all in milliseconds, -1 means not resolved yet, 0 means disabled
+	private long pingInterval = -1;
+	private long pongTimeout = -1;
+	private long staleTimeout = -1;
 
 	public static Map<String, Instance> instances = new ConcurrentHashMap<>();
 
@@ -164,6 +174,7 @@ public class BaseWebSocketEndpoint {
 		}
 		finally {
 			WSUtil.releasePageContext(pc);
+			if (pingInterval > 0 || staleTimeout > 0) SessionMonitor.ensureRunning();
 		}
 	}
 
@@ -175,6 +186,8 @@ public class BaseWebSocketEndpoint {
 		}
 
 		WSUtil.info(cw, "onMessage got involved for component [" + componentName + "] with session id [" + WSUtil.getId(cw, session) + "]");
+		Instance inst = instances.get(getId(session));
+		if (inst != null) inst.lastMessage = System.currentTimeMillis();
 		if (!last) {
 			WSUtil.info(cw, "buffering message part for onMessage call involved for component [" + componentName + "] with session id [" + WSUtil.getId(cw, session)
 					+ "], new part size: [" + message.length() + "], total buffered size: [" + (message.length() + (messageBuffer == null ? 0 : messageBuffer.length())) + "].");
@@ -227,6 +240,23 @@ public class BaseWebSocketEndpoint {
 		finally {
 			WSUtil.releasePageContext(pc);
 		}
+	}
+
+	/**
+	 * called when the client answers a ping, pongs come from the browser network stack, so they also
+	 * arrive for pages that are frozen (e.g. in Chrome's back/forward cache)
+	 */
+	public void onPong(Object session) {
+		if (newerVersion != null) {
+			try {
+				on(WSUtil.getConfig(factory.getConfigServer(), session), "onPong", session);
+			}
+			catch (Exception e) {
+			}
+			return;
+		}
+		Instance inst = instances.get(getId(session));
+		if (inst != null) inst.lastPong = System.currentTimeMillis();
 	}
 
 	public void onError(Object session, Throwable t, String componentName) throws PageException, IOException {
@@ -353,14 +383,22 @@ public class BaseWebSocketEndpoint {
 		if (idleTimeout == -1) {
 			synchronized (startTime) {
 				if (idleTimeout == -1) {
-					// read idle timeput from property if exist
+					long ping = -1, pong = -1, stale = -1;
+					// read idle timeout and stale detection settings from the listener properties if they exist
 					try {
 						Component c = getCFC(pc, session, componentName);
 						for (Property p: c.getProperties(false, true, false, false)) {
 							if ("idleTimeout".equalsIgnoreCase(p.getName())) {
-								idleTimeout = CFMLEngineFactory.getInstance().getCastUtil().toLongValue(p.getValue(), -1);
-								if (idleTimeout > 0) idleTimeout *= 1000;
-								break;
+								idleTimeout = toMillis(p.getValue());
+							}
+							else if ("pingInterval".equalsIgnoreCase(p.getName())) {
+								ping = toMillis(p.getValue());
+							}
+							else if ("pongTimeout".equalsIgnoreCase(p.getName())) {
+								pong = toMillis(p.getValue());
+							}
+							else if ("staleTimeout".equalsIgnoreCase(p.getName())) {
+								stale = toMillis(p.getValue());
 							}
 						}
 					}
@@ -368,11 +406,41 @@ public class BaseWebSocketEndpoint {
 						WSUtil.error(cw, e);
 					}
 
+					pingInterval = ping >= 0 ? ping : factory.getPingInterval(pc.getConfig());
+					pongTimeout = pong >= 0 ? pong : factory.getPongTimeout(pc.getConfig());
+					staleTimeout = stale >= 0 ? stale : factory.getStaleTimeout(pc.getConfig());
+
 					if (idleTimeout < 1) idleTimeout = factory.getIdleTimeout(pc.getConfig());
 					WSUtil.setMaxIdleTimeout(cw, session, idleTimeout);
 				}
 			}
 		}
+	}
+
+	// seconds (as defined in the listener) to milliseconds, -1 if not set or invalid
+	private static long toMillis(Object value) {
+		long l = CFMLEngineFactory.getInstance().getCastUtil().toLongValue(value, -1);
+		return l > 0 ? l * 1000 : l;
+	}
+
+	public long getPingInterval() {
+		return pingInterval;
+	}
+
+	public long getPongTimeout() {
+		return pongTimeout;
+	}
+
+	public long getStaleTimeout() {
+		return staleTimeout;
+	}
+
+	/**
+	 * name of the listener component the current thread is executing a listener function for, null when
+	 * called outside a listener function (e.g. from a regular request)
+	 */
+	public static String getCurrentComponent() {
+		return currentComponent.get();
 	}
 
 	private Component getCFC(PageContext pc, Object session, String componentName) throws PageException, IOException {
@@ -389,7 +457,7 @@ public class BaseWebSocketEndpoint {
 				if (inst == null) {
 					PageSource ps = mapping.getPageSource(componentName + ".cfc");
 					Component cfc = WSUtil.loadComponent(pc, ps, "/" + componentName + ".cfc", false, false, true);
-					instances.put(id, inst = new Instance(session, cfc));
+					instances.put(id, inst = new Instance(this, session, cfc, componentName, cw == null ? null : WSUtil.getContextId(cw)));
 				}
 			}
 		}
@@ -418,7 +486,15 @@ public class BaseWebSocketEndpoint {
 		Component cfc = getCFC(pc, session, componentName);
 		// has function
 		if (cfc.get(udfName, null) instanceof UDF) {
-			return cfc.call(pc, udfName, args);
+			String prev = currentComponent.get();
+			currentComponent.set(componentName);
+			try {
+				return cfc.call(pc, udfName, args);
+			}
+			finally {
+				if (prev == null) currentComponent.remove();
+				else currentComponent.set(prev);
+			}
 		}
 		return rtnIfNoUDF;
 	}
@@ -427,7 +503,15 @@ public class BaseWebSocketEndpoint {
 		Component cfc = getCFC(pc, session, componentName);
 		// has function
 		if (cfc.staticScope().get(udfName, null) instanceof UDF) {
-			return cfc.staticScope().call(pc, udfName, args);
+			String prev = currentComponent.get();
+			currentComponent.set(componentName);
+			try {
+				return cfc.staticScope().call(pc, udfName, args);
+			}
+			finally {
+				if (prev == null) currentComponent.remove();
+				else currentComponent.set(prev);
+			}
 		}
 		return rtnIfNoUDF;
 	}
@@ -444,10 +528,28 @@ public class BaseWebSocketEndpoint {
 
 		public final Object session;
 		public final Component cfc;
+		public final BaseWebSocketEndpoint endpoint;
+		public final String componentName;
+		public final String contextId;
+		public final long openTime;
+		public final long sequence;
+		public volatile long lastMessage;
+		public volatile long lastPing;
+		public volatile long lastPong;
 
 		public Instance(Object session, Component cfc) {
+			this(null, session, cfc, null, null);
+		}
+
+		public Instance(BaseWebSocketEndpoint endpoint, Object session, Component cfc, String componentName, String contextId) {
+			this.endpoint = endpoint;
 			this.session = session;
 			this.cfc = cfc;
+			this.componentName = componentName;
+			this.contextId = contextId;
+			this.openTime = System.currentTimeMillis();
+			this.sequence = openSequence.incrementAndGet();
+			this.lastMessage = openTime;
 		}
 
 	}

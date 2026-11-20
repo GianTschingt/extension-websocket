@@ -15,12 +15,18 @@
 	<function>
 		<name>WebsocketInfo</name>
 		<class bundle-name="{bundle-name}" bundle-version="{bundle-version}">org.lucee.extension.websocket.udf.WebsocketInfo</class>
-		<description>This funcitons give me information about the current websocket server instance.</description>
+		<description>Returns information about the websocket server of the current web context, including the open sessions (instances), newest first.</description>
 		<argument>
 			<name>addRaw</name>
 			<type>boolean</type>
 			<required>No</required>
 			   <description>in the session array add the raw Session object.</description>
+	    </argument>
+		<argument>
+			<name>component</name>
+			<type>string</type>
+			<required>No</required>
+			<description>name of the listener component to return the instances for. By default, when called from within a listener component, only the instances of that component are returned, otherwise all instances of the current web context. Use "*" to get all instances of the current web context. Instances are always ordered newest first.</description>
 	    </argument>
 		<return>
 			<type>struct</type>
